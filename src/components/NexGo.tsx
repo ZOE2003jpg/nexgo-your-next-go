@@ -1189,72 +1189,9 @@ function AdminApp({tab,onLogout}) {
 // ─── Desktop Wrapper ──────────────────────────────────────────────────────────
 function DesktopWrapper({children}) {
   return (
-    <div style={{minHeight:"100vh",background:G.black,display:"flex",alignItems:"stretch",position:"relative",overflow:"hidden"}}>
-      {/* Background glow */}
-      <div style={{position:"fixed",width:800,height:800,borderRadius:"50%",background:`radial-gradient(circle,rgba(201,168,76,0.06) 0%,transparent 65%)`,top:"50%",left:"25%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
-
-      {/* Left promo panel */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 40px 60px 60px",position:"relative",zIndex:1,minWidth:0}}>
-        <img src={NEXGO_LOGO} alt="NexGo" style={{width:200,objectFit:"contain",filter:"drop-shadow(0 0 20px rgba(201,168,76,0.4))",marginBottom:32}}/>
-        <div style={{fontFamily:"'Cormorant Garamond'",fontSize:52,fontWeight:700,color:G.white,lineHeight:1.1,marginBottom:16}}>
-          The Campus<br/><span style={{color:G.gold}}>Super App</span>
-        </div>
-        <div style={{fontSize:16,color:G.whiteDim,lineHeight:1.7,marginBottom:40,maxWidth:420}}>
-          Order food, send packages, book campus rides — all in one place. Built for Nigerian university students.
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:16,marginBottom:48}}>
-          {[{icon:"🍽️",title:"NexChow",desc:"Order from campus restaurants in minutes"},{icon:"📦",title:"NexDispatch",desc:"Send & receive packages across campus"},{icon:"🚌",title:"NexTrip",desc:"Book campus bus & keke rides instantly"}].map(f=>(
-            <div key={f.title} style={{display:"flex",gap:14,alignItems:"center"}}>
-              <div style={{width:44,height:44,borderRadius:12,background:G.goldGlow,border:`1px solid ${G.goldBorder}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{f.icon}</div>
-              <div>
-                <div style={{fontWeight:700,color:G.white,fontSize:15}}>{f.title}</div>
-                <div style={{fontSize:13,color:G.whiteDim}}>{f.desc}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:12}}>
-          <div style={{background:G.b3,border:`1px solid ${G.b5}`,borderRadius:10,padding:"10px 18px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-            <span style={{fontSize:20}}>🍎</span>
-            <div>
-              <div style={{fontSize:9,color:G.whiteDim,letterSpacing:".05em",textTransform:"uppercase"}}>Coming soon</div>
-              <div style={{fontSize:13,fontWeight:700,color:G.white}}>App Store</div>
-            </div>
-          </div>
-          <div style={{background:G.b3,border:`1px solid ${G.b5}`,borderRadius:10,padding:"10px 18px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-            <span style={{fontSize:20}}>🤖</span>
-            <div>
-              <div style={{fontSize:9,color:G.whiteDim,letterSpacing:".05em",textTransform:"uppercase"}}>Coming soon</div>
-              <div style={{fontSize:13,fontWeight:700,color:G.white}}>Google Play</div>
-            </div>
-          </div>
-        </div>
-        <div style={{marginTop:"auto",paddingTop:40,fontSize:12,color:G.whiteDim}}>
-          © 2025 NexGo · Built for campus life 🎓
-        </div>
-      </div>
-
-      {/* Right: Phone frame */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"40px 60px 40px 20px",flexShrink:0,position:"relative",zIndex:1}}>
-        {/* Phone outer frame */}
-        <div style={{position:"relative",width:390,height:820,borderRadius:44,background:"#0D0D0D",border:`2px solid #2A2A2A`,boxShadow:"0 40px 120px rgba(0,0,0,0.8), 0 0 0 1px #1A1A1A, inset 0 0 0 1px #333, 0 0 60px rgba(201,168,76,0.08)",overflow:"hidden",display:"flex",flexDirection:"column"}}>
-          {/* Notch */}
-          <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:120,height:34,background:"#0D0D0D",borderRadius:"0 0 20px 20px",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-            <div style={{width:10,height:10,borderRadius:"50%",background:"#1A1A1A",border:"1px solid #2A2A2A"}}/>
-            <div style={{width:60,height:6,borderRadius:3,background:"#1A1A1A"}}/>
-          </div>
-          {/* Screen */}
-          <div style={{flex:1,overflow:"hidden",borderRadius:42,marginTop:0}}>
-            {children}
-          </div>
-          {/* Home indicator */}
-          <div style={{position:"absolute",bottom:8,left:"50%",transform:"translateX(-50%)",width:120,height:4,background:"#333",borderRadius:2}}/>
-        </div>
-        {/* Side button details */}
-        <div style={{position:"absolute",right:52,top:"30%",width:3,height:60,background:"#2A2A2A",borderRadius:2}}/>
-        <div style={{position:"absolute",left:52,top:"28%",width:3,height:40,background:"#2A2A2A",borderRadius:2}}/>
-        <div style={{position:"absolute",left:52,top:"36%",width:3,height:40,background:"#2A2A2A",borderRadius:2}}/>
-        <div style={{position:"absolute",left:52,top:"44%",width:3,height:70,background:"#2A2A2A",borderRadius:2}}/>
+    <div style={{minHeight:"100vh",background:G.black,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{width:"100%",maxWidth:480,height:"100vh",overflow:"hidden"}}>
+        {children}
       </div>
     </div>
   );
@@ -1345,7 +1282,7 @@ function NexGoInner() {
 
   return isDesktop
     ? <DesktopWrapper>{AppContent}</DesktopWrapper>
-    : <div style={{height:"100%",maxWidth:480,margin:"0 auto"}}>{AppContent}</div>;
+    : <div style={{height:"100%",margin:"0 auto"}}>{AppContent}</div>;
 }
 
 // ─── Wrapped export ───────────────────────────────────────────────────────────
