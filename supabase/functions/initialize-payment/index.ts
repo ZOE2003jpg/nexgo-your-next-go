@@ -54,10 +54,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Get user profile for email
+    // Get user email - prefer auth email (always valid), fallback to profile
+    let customerEmail = user.email;
+    // KoraPay rejects non-standard TLDs like .test — use fallback
+    if (!customerEmail || !customerEmail.includes("@") || customerEmail.endsWith(".test")) {
+      customerEmail = `nexgo-user-${user.id.substring(0, 8)}@nexgo.app`;
+    }
+
     const { data: profile } = await supabase
       .from("profiles")
-      .select("email, full_name")
+      .select("full_name")
       .eq("id", user.id)
       .single();
 
@@ -73,7 +79,7 @@ Deno.serve(async (req) => {
         currency: "NGN",
         reference,
         customer: {
-          email: profile?.email || user.email,
+          email: customerEmail,
           name: profile?.full_name || "NexGo User",
         },
         metadata: {

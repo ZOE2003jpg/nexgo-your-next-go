@@ -77,7 +77,7 @@ export function Checkout({ cart, setCart, wallet, onBack, onDone, restaurantId }
   );
 
   return (
-    <div style={{ padding: "24px 16px", display: "flex", flexDirection: "column", gap: 18, animation: "fadeUp .4s ease", maxWidth: 800, margin: "0 auto", width: "100%" }}>
+    <div style={{ padding: "24px 16px", display: "flex", flexDirection: "column", gap: 18, animation: "fadeUp .4s ease", maxWidth: 800, margin: "0 auto", width: "100%", paddingBottom: 100 }}>
       <button onClick={onBack} style={{ ...btn("ghost", { width: "fit-content", padding: "8px 16px", fontSize: 13 }) }}>← Back</button>
       <PHeader title="Checkout" sub="Review your order" icon="🛒" />
       <div style={card()}>
@@ -101,7 +101,7 @@ export function Checkout({ cart, setCart, wallet, onBack, onDone, restaurantId }
       </div>
       <div style={card()}>
         <STitle>Delivery Address</STitle>
-        <input style={{ ...inp({ marginTop: 12 }) }} value={address} onChange={e => setAddress(e.target.value)} />
+        <input style={{ ...inp({ marginTop: 12 }) }} value={address} onChange={e => setAddress(e.target.value)} placeholder="Enter your delivery address" />
       </div>
       <div style={card()}>
         <STitle>Payment</STitle>
@@ -118,9 +118,11 @@ export function Checkout({ cart, setCart, wallet, onBack, onDone, restaurantId }
           ))}
         </div>
       </div>
-      <button onClick={place} disabled={loading} style={{ ...btn("gold", { width: "100%", padding: "16px", borderRadius: 14, fontSize: 15, opacity: loading ? .7 : 1 }) }}>
-        {loading ? <><Spinner /> Placing…</> : `Place Order · ₦${total.toLocaleString()}`}
-      </button>
+      <div style={{ position: "fixed", bottom: 82, left: "50%", transform: "translateX(-50%)", width: "calc(100% - 32px)", maxWidth: 500, zIndex: 101 }}>
+        <button onClick={place} disabled={loading} style={{ ...btn("gold", { width: "100%", padding: "16px", borderRadius: 14, fontSize: 15, opacity: loading ? .7 : 1, boxShadow: `0 8px 24px rgba(201,168,76,0.35)` }) }}>
+          {loading ? <><Spinner /> Placing…</> : `Place Order · ₦${total.toLocaleString()}`}
+        </button>
+      </div>
     </div>
   );
 }
