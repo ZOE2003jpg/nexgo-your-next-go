@@ -35,9 +35,9 @@ export function StudentHome({ wallet, setTab, profile }: any) {
     const r = result as any;
     if (!r?.success) { toast(r?.message || "Cannot cancel this order", "error"); setCancellingId(null); return; }
     refreshWallet();
-    toast(`Order cancelled & ₦${r.refunded?.toLocaleString() || 0} refunded`, "success");
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "cancelled" } : o));
+    toast(`Order cancelled${r.refunded > 0 ? ` & ₦${r.refunded.toLocaleString()} refunded` : ""}`, "success");
     setCancellingId(null);
-    fetchOrders();
   };
 
   const submitDispute = async () => {
