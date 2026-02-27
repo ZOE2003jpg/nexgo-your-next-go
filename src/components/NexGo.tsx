@@ -350,24 +350,12 @@ function StudentHome({wallet,setTab,profile}: any) {
   const cancelOrder = async (orderId: string) => {
     if (!user) return;
     setCancellingId(orderId);
-    // Validate transition via RPC
-    const { data: validation } = await supabase.rpc("validate_order_transition", { _order_id: orderId, _new_status: "cancelled", _user_id: user.id });
-    const v = validation as any;
-    if (!v?.valid) { toast(v?.message || "Cannot cancel this order", "error"); setCancellingId(null); return; }
-    // Cancel and refund
-    const order = orders.find(o => o.id === orderId);
-    await supabase.from("orders").update({ status: "cancelled", cancelled_by: user.id, cancellation_reason: "Cancelled by student" }).eq("id", orderId);
-    // Auto refund wallet
-    if (order) {
-      const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
-      if (w) {
-        const refundAmt = order.total_amount;
-        await supabase.from("wallets").update({ balance: w.balance + refundAmt }).eq("id", w.id);
-        await supabase.from("wallet_transactions").insert({ wallet_id: w.id, user_id: user.id, amount: refundAmt, label: `Refund ${order.order_number}`, icon: "↩️" });
-        refreshWallet();
-      }
-    }
-    toast("Order cancelled & refunded", "success");
+    // Use server-side atomic refund_order RPC
+    const { data: result } = await supabase.rpc("refund_order", { _order_id: orderId, _user_id: user.id });
+    const r = result as any;
+    if (!r?.success) { toast(r?.message || "Cannot cancel this order", "error"); setCancellingId(null); return; }
+    refreshWallet();
+    toast(`Order cancelled & ₦${r.refunded?.toLocaleString() || 0} refunded`, "success");
     setCancellingId(null);
     fetchOrders();
   };
@@ -634,16 +622,12 @@ function Checkout({cart,setCart,wallet,onBack,onDone,restaurantId}: any) {
     }));
     await supabase.from("order_items").insert(items);
 
-    // Deduct wallet if wallet pay
+    // Deduct wallet atomically via server-side RPC
     if (pay === "wallet") {
-      const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
-      if (w) {
-        await supabase.from("wallets").update({ balance: w.balance - total }).eq("id", w.id);
-        await supabase.from("wallet_transactions").insert({
-          wallet_id: w.id, user_id: user.id, amount: -total, label: `NexChow ${orderNum}`, icon: "🍽️"
-        });
-        refreshWallet();
-      }
+      const { data: deductResult } = await supabase.rpc("deduct_wallet", { _user_id: user.id, _amount: total, _label: `NexChow ${orderNum}`, _icon: "🍽️" });
+      const dr = deductResult as any;
+      if (!dr?.success) { toast(dr?.message || "Wallet deduction failed", "error"); setLoading(false); placedRef.current=false; return; }
+      refreshWallet();
     }
 
     setLoading(false);setDone(true);setCart([]);
@@ -819,15 +803,11 @@ function NexTrip({wallet}: any) {
     });
     if (error) { toast(error.message, "error"); setLoading(false); return; }
 
-    // Deduct wallet
-    const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
-    if (w) {
-      await supabase.from("wallets").update({ balance: w.balance - sel.price }).eq("id", w.id);
-      await supabase.from("wallet_transactions").insert({
-        wallet_id: w.id, user_id: user.id, amount: -sel.price, label: `NexTrip ${sel.from_location} → ${sel.to_location}`, icon: "🚌"
-      });
-      refreshWallet();
-    }
+    // Deduct wallet atomically via server-side RPC
+    const { data: deductResult } = await supabase.rpc("deduct_wallet", { _user_id: user.id, _amount: sel.price, _label: `NexTrip ${sel.from_location} → ${sel.to_location}`, _icon: "🚌" });
+    const dr = deductResult as any;
+    if (!dr?.success) { toast(dr?.message || "Wallet deduction failed", "error"); setLoading(false); return; }
+    refreshWallet();
 
     setLoading(false);setBooked(true);
     toast("Seat booked!","success");
@@ -903,13 +883,10 @@ function WalletScreen({wallet}: any) {
       return;
     }
 
-    // Direct wallet top-up (demo/dev mode)
-    const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
-    if (!w) { toast("Wallet not found", "error"); return; }
-    await supabase.from("wallets").update({ balance: w.balance + v }).eq("id", w.id);
-    await supabase.from("wallet_transactions").insert({
-      wallet_id: w.id, user_id: user.id, amount: v, label: "Wallet Top-up", icon: "💳"
-    });
+    // Direct wallet top-up via server-side RPC (demo/dev mode)
+    const { data: topupResult } = await supabase.rpc("topup_wallet", { _user_id: user.id, _amount: v });
+    const tr = topupResult as any;
+    if (!tr?.success) { toast(tr?.message || "Top-up failed", "error"); return; }
     refreshWallet();
     setAmt("");
     toast(`₦${v.toLocaleString()} added!`,"success");
