@@ -450,6 +450,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      accept_order_as_rider: {
+        Args: { _order_id: string; _rider_id: string }
+        Returns: Json
+      }
+      deduct_wallet: {
+        Args: {
+          _amount: number
+          _icon?: string
+          _label: string
+          _user_id: string
+        }
+        Returns: Json
+      }
       generate_delivery_otp: { Args: { _order_id: string }; Returns: string }
       get_user_role: {
         Args: { _user_id: string }
@@ -461,6 +474,14 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      refund_order: {
+        Args: { _order_id: string; _user_id: string }
+        Returns: Json
+      }
+      topup_wallet: {
+        Args: { _amount: number; _user_id: string }
+        Returns: Json
       }
       validate_order_transition: {
         Args: { _new_status: string; _order_id: string; _user_id: string }
