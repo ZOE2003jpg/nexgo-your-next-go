@@ -88,7 +88,7 @@ const PHeader = ({title,sub,icon}: any) => (
 const Lbl = ({children}: any) => <div style={{fontSize:11,fontWeight:600,color:G.whiteDim,letterSpacing:".06em",textTransform:"uppercase"}}>{children}</div>;
 const Chip = ({children}: any) => <div style={{background:G.goldGlow,border:`1px solid ${G.goldDark}`,color:G.gold,fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:6}}>{children}</div>;
 const Badge = ({status}: any) => {
-  const c: any=({Delivered:G.success,Done:G.success,Active:G.gold,"In Transit":G.gold,Preparing:"#E8A030",Pending:G.whiteDim,Ready:G.goldLight,Open:G.success,Suspended:G.danger,Confirmed:G.success})[status]||G.whiteDim;
+  const c: any=({delivered:G.success,Delivered:G.success,Done:G.success,Active:G.gold,out_for_delivery:G.gold,"In Transit":G.gold,preparing:"#E8A030",Preparing:"#E8A030",Pending:G.whiteDim,accepted:G.gold,ready:G.goldLight,Ready:G.goldLight,Open:G.success,Suspended:G.danger,Confirmed:G.success,cancelled:G.danger,under_review:"#E8A030"})[status]||G.whiteDim;
   return <div style={{background:`${c}22`,color:c,fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:6,display:"inline-block",whiteSpace:"nowrap"}}>{status}</div>;
 };
 const Spinner = ({size=16,color=G.black}: any) => <span style={{display:"inline-block",width:size,height:size,border:`2px solid ${color}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/>;
@@ -325,13 +325,65 @@ function Auth() {
 // ─── Student: Home ────────────────────────────────────────────────────────────
 function StudentHome({wallet,setTab,profile}: any) {
   const [orders, setOrders] = useState<any[]>([]);
-  const { user } = useAuth();
+  const [cancellingId, setCancellingId] = useState<string|null>(null);
+  const [disputeId, setDisputeId] = useState<string|null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
+  const { user, refreshWallet } = useAuth();
 
-  useEffect(() => {
+  const fetchOrders = useCallback(() => {
     if (!user) return;
-    supabase.from("orders").select("id, order_number, total_amount, status, created_at, restaurant_id, restaurants(name)").eq("student_id", user.id).order("created_at", {ascending:false}).limit(5)
+    supabase.from("orders").select("id, order_number, total_amount, status, created_at, restaurant_id, delivery_fee, disputed_at, restaurants(name)").eq("student_id", user.id).order("created_at", {ascending:false}).limit(10)
       .then(({data}) => { if(data) setOrders(data); });
   }, [user]);
+
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  // Real-time subscription
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase.channel('student-orders')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `student_id=eq.${user.id}` }, () => { fetchOrders(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user, fetchOrders]);
+
+  const cancelOrder = async (orderId: string) => {
+    if (!user) return;
+    setCancellingId(orderId);
+    // Validate transition via RPC
+    const { data: validation } = await supabase.rpc("validate_order_transition", { _order_id: orderId, _new_status: "cancelled", _user_id: user.id });
+    const v = validation as any;
+    if (!v?.valid) { toast(v?.message || "Cannot cancel this order", "error"); setCancellingId(null); return; }
+    // Cancel and refund
+    const order = orders.find(o => o.id === orderId);
+    await supabase.from("orders").update({ status: "cancelled", cancelled_by: user.id, cancellation_reason: "Cancelled by student" }).eq("id", orderId);
+    // Auto refund wallet
+    if (order) {
+      const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
+      if (w) {
+        const refundAmt = order.total_amount;
+        await supabase.from("wallets").update({ balance: w.balance + refundAmt }).eq("id", w.id);
+        await supabase.from("wallet_transactions").insert({ wallet_id: w.id, user_id: user.id, amount: refundAmt, label: `Refund ${order.order_number}`, icon: "↩️" });
+        refreshWallet();
+      }
+    }
+    toast("Order cancelled & refunded", "success");
+    setCancellingId(null);
+    fetchOrders();
+  };
+
+  const submitDispute = async () => {
+    if (!user || !disputeId || !disputeReason) return;
+    const order = orders.find(o => o.id === disputeId);
+    if (!order) return;
+    // Check if within 30 minutes of creation
+    const ageMs = Date.now() - new Date(order.created_at).getTime();
+    if (ageMs > 30 * 60 * 1000) { toast("Dispute window closed (30 min)", "error"); setDisputeId(null); return; }
+    await supabase.from("orders").update({ status: "under_review", dispute_reason: disputeReason, disputed_at: new Date().toISOString() }).eq("id", disputeId);
+    toast("Dispute submitted for review", "success");
+    setDisputeId(null); setDisputeReason("");
+    fetchOrders();
+  };
 
   const firstName = profile?.full_name?.split(" ")[0] || "Student";
   const hour = new Date().getHours();
@@ -339,6 +391,17 @@ function StudentHome({wallet,setTab,profile}: any) {
 
   return (
     <div style={{padding:"24px 16px",display:"flex",flexDirection:"column",gap:24,animation:"fadeUp .4s ease",maxWidth:800,margin:"0 auto",width:"100%"}}>
+      {/* Dispute Modal */}
+      {disputeId && (
+        <div style={{position:"fixed",inset:0,zIndex:200,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setDisputeId(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{...card({maxWidth:400,width:"100%"})}}>
+            <STitle>Flag Order</STitle>
+            <div style={{fontSize:13,color:G.whiteDim,margin:"8px 0 12px"}}>Describe your issue (within 30 min of delivery)</div>
+            <textarea style={{...inp({height:80,resize:"none" as any}),marginBottom:12}} placeholder="What went wrong?" value={disputeReason} onChange={e=>setDisputeReason(e.target.value)}/>
+            <button onClick={submitDispute} style={{...btn("gold",{width:"100%",padding:"13px"})}}>Submit Dispute</button>
+          </div>
+        </div>
+      )}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <div style={{color:G.whiteDim,fontSize:13}}>{greeting},</div>
@@ -374,14 +437,33 @@ function StudentHome({wallet,setTab,profile}: any) {
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           {orders.length===0 && <div style={{...card(),textAlign:"center",color:G.whiteDim,fontSize:14}}>No orders yet. Try NexChow!</div>}
           {orders.map((o: any)=>(
-            <div key={o.id} style={card({display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"})}>
-              <div>
-                <div style={{fontWeight:600,fontSize:14,color:G.white}}>{(o.restaurants as any)?.name || "Order"}</div>
-                <div style={{fontSize:12,color:G.whiteDim,marginTop:2}}>{o.order_number} · {new Date(o.created_at).toLocaleDateString()}</div>
+            <div key={o.id} style={card({cursor:"pointer"})}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:14,color:G.white}}>{(o.restaurants as any)?.name || "Order"}</div>
+                  <div style={{fontSize:12,color:G.whiteDim,marginTop:2}}>{o.order_number} · {new Date(o.created_at).toLocaleDateString()}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontWeight:700,color:G.gold,fontFamily:"'DM Mono'",fontSize:13}}>₦{o.total_amount?.toLocaleString()}</div>
+                  <Badge status={o.status}/>
+                </div>
               </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontWeight:700,color:G.gold,fontFamily:"'DM Mono'",fontSize:13}}>₦{o.total_amount?.toLocaleString()}</div>
-                <Badge status={o.status}/>
+              {/* Action buttons */}
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                {o.status==="Pending"&&(
+                  <button onClick={(e)=>{e.stopPropagation();cancelOrder(o.id);}} disabled={cancellingId===o.id} style={{...btn("ghost",{padding:"6px 12px",fontSize:12,color:G.danger,border:`1px solid ${G.danger}40`,opacity:cancellingId===o.id?.5:1})}}>
+                    {cancellingId===o.id?<Spinner size={12} color={G.danger}/>:"Cancel"}
+                  </button>
+                )}
+                {o.status==="Delivered"&&!o.disputed_at&&(()=>{
+                  const ageMs = Date.now() - new Date(o.created_at).getTime();
+                  return ageMs <= 30*60*1000;
+                })()&&(
+                  <button onClick={(e)=>{e.stopPropagation();setDisputeId(o.id);}} style={{...btn("ghost",{padding:"6px 12px",fontSize:12,color:"#E8A030",border:"1px solid rgba(232,160,48,0.4)"})}}>
+                    ⚠️ Dispute
+                  </button>
+                )}
+                {o.status==="under_review"&&<span style={{fontSize:11,color:"#E8A030",fontWeight:600}}>🔍 Under Review</span>}
               </div>
             </div>
           ))}
@@ -516,14 +598,17 @@ function Checkout({cart,setCart,wallet,onBack,onDone,restaurantId}: any) {
   const [loading,setLoading] = useState(false);
   const [done,setDone] = useState(false);
   const [address,setAddress] = useState("Hostel B, Room 12");
+  const placedRef = useRef(false); // Duplicate prevention
   const sub=cart.reduce((a: number,c: any)=>a+c.price*c.qty,0);
   const fee=150; const total=sub+fee;
 
   const place=async()=>{
-    if (!user) return;
+    if (!user || placedRef.current) return;
+    placedRef.current = true;
     setLoading(true);
-    if(pay==="wallet" && wallet<total){toast("Insufficient wallet balance","error");setLoading(false);return;}
+    if(pay==="wallet" && wallet<total){toast("Insufficient wallet balance","error");setLoading(false);placedRef.current=false;return;}
 
+    const payRef = `PAY-${Date.now()}-${Math.random().toString(36).substr(2,6)}`;
     const orderNum = "NX-" + Date.now().toString(36).toUpperCase();
     const { data: order, error } = await supabase.from("orders").insert({
       order_number: orderNum,
@@ -533,10 +618,11 @@ function Checkout({cart,setCart,wallet,onBack,onDone,restaurantId}: any) {
       delivery_fee: fee,
       delivery_address: address,
       payment_method: pay,
+      payment_reference: payRef,
       status: "Pending",
     }).select().single();
 
-    if (error) { toast("Failed to place order: " + error.message, "error"); setLoading(false); return; }
+    if (error) { toast("Failed to place order: " + error.message, "error"); setLoading(false); placedRef.current=false; return; }
 
     // Insert order items
     const items = cart.map((c: any) => ({
@@ -788,6 +874,8 @@ function WalletScreen({wallet}: any) {
   const { user, profile, refreshWallet } = useAuth();
   const [amt,setAmt] = useState("");
   const [txns,setTxns] = useState<any[]>([]);
+  const [fundMethod,setFundMethod] = useState<"wallet"|"korapay">("wallet");
+  const [fundingKora,setFundingKora] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -799,6 +887,23 @@ function WalletScreen({wallet}: any) {
     if (!user) return;
     const v=parseInt(amt);
     if(isNaN(v)||v<=0){toast("Enter a valid amount","error");return;}
+
+    if (fundMethod === "korapay") {
+      setFundingKora(true);
+      const { data, error } = await supabase.functions.invoke("initialize-payment", {
+        body: { amount: v },
+      });
+      setFundingKora(false);
+      if (error || !data?.checkout_url) {
+        toast("Payment initialization failed", "error");
+        return;
+      }
+      window.open(data.checkout_url, "_blank");
+      toast("Complete payment in the new tab", "info");
+      return;
+    }
+
+    // Direct wallet top-up (demo/dev mode)
     const { data: w } = await supabase.from("wallets").select("id, balance").eq("user_id", user.id).maybeSingle();
     if (!w) { toast("Wallet not found", "error"); return; }
     await supabase.from("wallets").update({ balance: w.balance + v }).eq("id", w.id);
@@ -827,7 +932,21 @@ function WalletScreen({wallet}: any) {
           ))}
         </div>
         <input style={{...inp({marginBottom:12})}} type="number" placeholder="Enter amount…" value={amt} onChange={e=>setAmt(e.target.value)}/>
-        <button onClick={fund} style={{...btn("gold",{width:"100%",padding:"13px"})}}>Fund Wallet →</button>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+          {[{id:"wallet" as const,label:"Demo Top-up",sub:"Instant (dev mode)",icon:"💳"},{id:"korapay" as const,label:"KoraPay",sub:"Pay with card/bank",icon:"🏦"}].map(m=>(
+            <div key={m.id} onClick={()=>setFundMethod(m.id)} style={{padding:12,borderRadius:10,border:`2px solid ${fundMethod===m.id?G.gold:G.b5}`,background:fundMethod===m.id?G.goldGlow:G.b4,cursor:"pointer",display:"flex",gap:12,alignItems:"center",transition:"all .2s"}}>
+              <span style={{fontSize:20}}>{m.icon}</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,color:G.white,fontSize:13}}>{m.label}</div>
+                <div style={{fontSize:11,color:G.whiteDim}}>{m.sub}</div>
+              </div>
+              {fundMethod===m.id&&<span style={{color:G.gold,fontSize:18}}>✓</span>}
+            </div>
+          ))}
+        </div>
+        <button onClick={fund} disabled={fundingKora} style={{...btn("gold",{width:"100%",padding:"13px",opacity:fundingKora?.6:1})}}>
+          {fundingKora?<><Spinner/> Connecting…</>:fundMethod==="korapay"?"Pay with KoraPay →":"Fund Wallet →"}
+        </button>
       </div>
       <div>
         <STitle>Transactions</STitle>
@@ -926,21 +1045,35 @@ function VendorApp({tab,onLogout}: any) {
   const [menuItems,setMenuItems] = useState<any[]>([]);
   const [restaurant, setRestaurant] = useState<any>(null);
   const [isOpen,setIsOpen] = useState(true);
+  const [updatingId, setUpdatingId] = useState<string|null>(null);
 
   useEffect(() => {
     if (!user) return;
-    // Fetch vendor's restaurant
     supabase.from("restaurants").select("*").eq("owner_id", user.id).limit(1).maybeSingle()
       .then(({data}) => { if(data) { setRestaurant(data); setIsOpen(data.is_open); } });
   }, [user]);
 
-  useEffect(() => {
+  const fetchOrders = useCallback(() => {
     if (!restaurant) return;
     supabase.from("orders").select("*, order_items(*)").eq("restaurant_id", restaurant.id).order("created_at", {ascending:false}).limit(20)
       .then(({data}) => { if(data) setOrders(data); });
+  }, [restaurant]);
+
+  useEffect(() => {
+    if (!restaurant) return;
+    fetchOrders();
     supabase.from("menu_items").select("*").eq("restaurant_id", restaurant.id)
       .then(({data}) => { if(data) setMenuItems(data); });
-  }, [restaurant]);
+  }, [restaurant, fetchOrders]);
+
+  // Real-time subscription for vendor orders
+  useEffect(() => {
+    if (!restaurant) return;
+    const channel = supabase.channel('vendor-orders')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `restaurant_id=eq.${restaurant.id}` }, () => { fetchOrders(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [restaurant, fetchOrders]);
 
   const toggleOpen = async () => {
     if (!restaurant) return;
@@ -949,13 +1082,38 @@ function VendorApp({tab,onLogout}: any) {
     setIsOpen(newState);
   };
 
+  // Strict state machine: pending→accepted→preparing→ready
   const nextStatus = async (id: string, current: string) => {
-    const next = current === "Pending" ? "Preparing" : current === "Preparing" ? "Ready" : "Done";
+    if (!user) return;
+    setUpdatingId(id);
+    const statusMap: any = { "Pending": "accepted", "accepted": "preparing", "preparing": "ready" };
+    const next = statusMap[current];
+    if (!next) { toast("No valid next status", "error"); setUpdatingId(null); return; }
+
+    const { data: validation } = await supabase.rpc("validate_order_transition", { _order_id: id, _new_status: next, _user_id: user.id });
+    const v = validation as any;
+    if (!v?.valid) { toast(v?.message || "Invalid transition", "error"); setUpdatingId(null); return; }
+
     await supabase.from("orders").update({ status: next }).eq("id", id);
     setOrders(p => p.map(o => o.id === id ? {...o, status: next} : o));
+    toast(`Order → ${next}`, "success");
+    setUpdatingId(null);
+  };
+
+  const cancelOrder = async (id: string) => {
+    if (!user) return;
+    setUpdatingId(id);
+    const { data: validation } = await supabase.rpc("validate_order_transition", { _order_id: id, _new_status: "cancelled", _user_id: user.id });
+    const v = validation as any;
+    if (!v?.valid) { toast(v?.message || "Cannot cancel", "error"); setUpdatingId(null); return; }
+    await supabase.from("orders").update({ status: "cancelled", cancelled_by: user.id, cancellation_reason: "Cancelled by vendor" }).eq("id", id);
+    setOrders(p => p.map(o => o.id === id ? {...o, status: "cancelled"} : o));
+    toast("Order cancelled", "success");
+    setUpdatingId(null);
   };
 
   const restName = restaurant?.name || profile?.full_name || "Vendor";
+  const statusLabel: any = {"Pending":"Accept","accepted":"Start Prep","preparing":"Mark Ready"};
 
   if(tab==="orders") return (
     <div style={{padding:"24px 16px",display:"flex",flexDirection:"column",gap:14,animation:"fadeUp .4s ease",maxWidth:800,margin:"0 auto",width:"100%"}}>
@@ -970,9 +1128,16 @@ function VendorApp({tab,onLogout}: any) {
           <div style={{fontSize:13,color:G.whiteDim,marginBottom:12}}>{new Date(o.created_at).toLocaleString()}</div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <span style={{color:G.gold,fontFamily:"'DM Mono'",fontWeight:700}}>₦{o.total_amount?.toLocaleString()}</span>
-            {o.status!=="Done"&&o.status!=="Delivered"&&<button onClick={()=>nextStatus(o.id, o.status)} style={{...btn("gold",{padding:"8px 16px",fontSize:12})}}>
-              {o.status==="Pending"?"Start Prep":o.status==="Preparing"?"Mark Ready":"Complete"}
-            </button>}
+            <div style={{display:"flex",gap:8}}>
+              {statusLabel[o.status]&&(
+                <button onClick={()=>nextStatus(o.id, o.status)} disabled={updatingId===o.id} style={{...btn("gold",{padding:"8px 16px",fontSize:12,opacity:updatingId===o.id?.5:1})}}>
+                  {updatingId===o.id?<Spinner size={12}/>:statusLabel[o.status]}
+                </button>
+              )}
+              {["Pending","accepted","preparing"].includes(o.status)&&(
+                <button onClick={()=>cancelOrder(o.id)} disabled={updatingId===o.id} style={{...btn("ghost",{padding:"8px 12px",fontSize:12,color:G.danger,border:`1px solid ${G.danger}40`})}}>✕</button>
+              )}
+            </div>
           </div>
         </div>
       ))}
@@ -1056,24 +1221,77 @@ function RiderApp({tab,onLogout}: any) {
   const [online,setOnline] = useState(true);
   const [deliveries,setDeliveries] = useState<any[]>([]);
   const [dispatches,setDispatches] = useState<any[]>([]);
+  const [updatingId, setUpdatingId] = useState<string|null>(null);
+  const [otpOrderId, setOtpOrderId] = useState<string|null>(null);
+  const [otpInput, setOtpInput] = useState("");
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
 
-  useEffect(() => {
+  const fetchData = useCallback(() => {
     if (!user) return;
-    // Rider's assigned orders
     supabase.from("orders").select("*, restaurants(name)").eq("rider_id", user.id).order("created_at", {ascending:false}).limit(20)
       .then(({data}) => { if(data) setDeliveries(data); });
-    // Rider's assigned dispatches
     supabase.from("dispatches").select("*").eq("rider_id", user.id).order("created_at", {ascending:false}).limit(20)
       .then(({data}) => { if(data) setDispatches(data); });
   }, [user]);
 
-  const updateOrder = async (id: string, status: string) => {
-    await supabase.from("orders").update({ status }).eq("id", id);
-    setDeliveries(p => p.map(d => d.id === id ? {...d, status} : d));
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Real-time subscription
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase.channel('rider-orders')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `rider_id=eq.${user.id}` }, () => { fetchData(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dispatches', filter: `rider_id=eq.${user.id}` }, () => { fetchData(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user, fetchData]);
+
+  const updateOrder = async (id: string, newStatus: string) => {
+    if (!user) return;
+    setUpdatingId(id);
+
+    // For "out_for_delivery", generate OTP first
+    if (newStatus === "out_for_delivery") {
+      const { data: validation } = await supabase.rpc("validate_order_transition", { _order_id: id, _new_status: newStatus, _user_id: user.id });
+      const v = validation as any;
+      if (!v?.valid) { toast(v?.message || "Invalid transition", "error"); setUpdatingId(null); return; }
+      // Generate OTP
+      await supabase.rpc("generate_delivery_otp", { _order_id: id });
+      await supabase.from("orders").update({ status: newStatus }).eq("id", id);
+      setDeliveries(p => p.map(d => d.id === id ? {...d, status: newStatus} : d));
+      toast("Marked out for delivery. OTP sent to student.", "success");
+      setUpdatingId(null);
+      return;
+    }
+
+    // For "delivered", require OTP verification
+    if (newStatus === "delivered") {
+      setOtpOrderId(id);
+      setUpdatingId(null);
+      return;
+    }
+
+    await supabase.from("orders").update({ status: newStatus }).eq("id", id);
+    setDeliveries(p => p.map(d => d.id === id ? {...d, status: newStatus} : d));
+    setUpdatingId(null);
   };
+
+  const verifyOtpAndDeliver = async () => {
+    if (!otpOrderId || !otpInput) return;
+    setVerifyingOtp(true);
+    const { data: valid } = await supabase.rpc("verify_delivery_otp", { _order_id: otpOrderId, _otp: otpInput });
+    if (!valid) { toast("Invalid or expired OTP", "error"); setVerifyingOtp(false); return; }
+    await supabase.from("orders").update({ status: "delivered" }).eq("id", otpOrderId);
+    setDeliveries(p => p.map(d => d.id === otpOrderId ? {...d, status: "delivered"} : d));
+    toast("Delivery confirmed! ✅", "success");
+    setOtpOrderId(null); setOtpInput(""); setVerifyingOtp(false);
+  };
+
   const updateDispatch = async (id: string, status: string) => {
+    setUpdatingId(id);
     await supabase.from("dispatches").update({ status }).eq("id", id);
     setDispatches(p => p.map(d => d.id === id ? {...d, status} : d));
+    setUpdatingId(null);
   };
 
   if(tab==="profile") return <ProfileScreen onLogout={onLogout}/>;
@@ -1093,6 +1311,20 @@ function RiderApp({tab,onLogout}: any) {
   // Rider Dashboard
   return (
     <div style={{padding:"24px 16px",display:"flex",flexDirection:"column",gap:20,animation:"fadeUp .4s ease",maxWidth:800,margin:"0 auto",width:"100%"}}>
+      {/* OTP Modal */}
+      {otpOrderId && (
+        <div style={{position:"fixed",inset:0,zIndex:200,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>{setOtpOrderId(null);setOtpInput("");}}>
+          <div onClick={e=>e.stopPropagation()} style={{...card({maxWidth:380,width:"100%",textAlign:"center"})}}>
+            <div style={{fontSize:48,marginBottom:12}}>🔐</div>
+            <STitle>Enter Delivery OTP</STitle>
+            <div style={{fontSize:13,color:G.whiteDim,margin:"8px 0 16px"}}>Ask the student for their 6-digit delivery code</div>
+            <input style={{...inp({textAlign:"center",fontSize:24,fontFamily:"'DM Mono'",letterSpacing:"8px",marginBottom:16})}} placeholder="000000" maxLength={6} value={otpInput} onChange={e=>setOtpInput(e.target.value.replace(/\D/g,""))}/>
+            <button onClick={verifyOtpAndDeliver} disabled={verifyingOtp||otpInput.length!==6} style={{...btn("gold",{width:"100%",padding:"14px",opacity:verifyingOtp||otpInput.length!==6?.5:1})}}>
+              {verifyingOtp?<><Spinner/> Verifying…</>:"Confirm Delivery ✓"}
+            </button>
+          </div>
+        </div>
+      )}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           <div style={{color:G.whiteDim,fontSize:13}}>Rider Dashboard</div>
@@ -1111,7 +1343,7 @@ function RiderApp({tab,onLogout}: any) {
         ))}
       </div>
       <STitle>Active Orders</STitle>
-      {deliveries.filter(d=>d.status!=="Delivered"&&d.status!=="Done").map((d: any)=>(
+      {deliveries.filter(d=>!["delivered","cancelled","Done"].includes(d.status)).map((d: any)=>(
         <div key={d.id} style={card({border:`1.5px solid ${G.gold}`})}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
             <span style={{fontWeight:700,color:G.white}}>{d.order_number}</span><Badge status={d.status}/>
@@ -1120,9 +1352,16 @@ function RiderApp({tab,onLogout}: any) {
           {d.delivery_address && <div style={{fontSize:13,color:G.whiteDim}}>🏠 {d.delivery_address}</div>}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
             <span style={{color:G.gold,fontFamily:"'DM Mono'",fontWeight:700}}>₦{d.delivery_fee}</span>
-            <button onClick={()=>updateOrder(d.id, d.status==="Pending"?"In Transit":"Delivered")} style={{...btn("gold",{padding:"8px 16px",fontSize:13})}}>
-              {d.status==="Pending"?"Pick Up":d.status==="In Transit"?"Deliver":"Next"}
-            </button>
+            {d.status==="ready"&&(
+              <button onClick={()=>updateOrder(d.id,"out_for_delivery")} disabled={updatingId===d.id} style={{...btn("gold",{padding:"8px 16px",fontSize:13,opacity:updatingId===d.id?.5:1})}}>
+                {updatingId===d.id?<Spinner size={12}/>:"Pick Up"}
+              </button>
+            )}
+            {d.status==="out_for_delivery"&&(
+              <button onClick={()=>updateOrder(d.id,"delivered")} disabled={updatingId===d.id} style={{...btn("gold",{padding:"8px 16px",fontSize:13})}}>
+                🔐 Enter OTP to Deliver
+              </button>
+            )}
           </div>
         </div>
       ))}
@@ -1135,7 +1374,7 @@ function RiderApp({tab,onLogout}: any) {
           <div style={{fontSize:13,color:G.whiteDim}}>📍 {d.pickup_location} → {d.dropoff_location}</div>
           <div style={{display:"flex",justifyContent:"space-between",marginTop:12}}>
             <span style={{color:G.gold,fontFamily:"'DM Mono'"}}>₦{d.fee}</span>
-            <button onClick={()=>updateDispatch(d.id, d.status==="Pending"?"In Transit":"Delivered")} style={{...btn("gold",{padding:"8px 16px",fontSize:12})}}>
+            <button onClick={()=>updateDispatch(d.id, d.status==="Pending"?"In Transit":"Delivered")} disabled={updatingId===d.id} style={{...btn("gold",{padding:"8px 16px",fontSize:12,opacity:updatingId===d.id?.5:1})}}>
               {d.status==="Pending"?"Accept":"Complete"}
             </button>
           </div>
